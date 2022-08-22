@@ -1,0 +1,46 @@
+library(Seurat)
+library(cowplot)
+library(future)
+library(Matrix)
+options(future.globals.maxSize = 1000000 * 1024^2)
+filelist<-c("BN1d0V5","BN2d0V5","BS1d0V5","BS2d0V5","BN1d15V5","BN2d15V5","BS1d15V5","BS2d15V5","TN1d15V5","TN2d15V5","TS1d15V5","TS2d15V5")
+namelist<-c("Day0_Blood_Normal_1","Day0_Blood_Normal_2","Day0_Blood_Sehpin1_1","Day0_Blood_Sephin1_2","Day15_Blood_Normal_1","Day15_Blood_Normal_2","Day15_Blood_Sephin1_1","Day15_Blood_Sephin1_2","Day15_Tumor_Normal_1","Day15_Tumor_Normal_2","Day15_Tumor_Sehpin1_1","Day15_Tumor_Sephin1_2")
+
+mouse.data<-list()
+for(i in 1:length(filelist)){
+  fl=filelist[i]
+  sname=paste0("/storage/work/wangrj/MOUSE_SEPHIN1_RESULTS/Exp/",fl,"_output/outs/filtered_feature_bc_matrix/")
+	sample.raw<-Read10X(sname)
+	sample<-CreateSeuratObject(counts=sample.raw,project="MOUSE_SEPHIN1",min.cells=2)
+	sample$COMPARE<-namelist[i]
+  gname<-gsub("_1","",namelist[i])
+  gname<-gsub("_2","",gname)
+  sample$SAMPLE<-gname
+	sample<-subset(sample,subset=nFeature_RNA>100)
+	sample<-NormalizeData(sample,verbose=FALSE)
+	sample<-FindVariableFeatures(sample,selection.method="vst",nfeatures=4000)
+	mouse.data<-c(mouse.data,list(sample))
+}
+names(mouse.data)<-namelist
+plan("multiprocess", workers = 8)
+mouse.anchors<-FindIntegrationAnchors(object.list=mouse.data,dims=1:40)
+saveRDS(mouse.anchors,"mouse_sephin1_all_anchors_re.rds")
+mouse.data<-IntegrateData(anchorset=mouse.anchors,dims=1:40)
+saveRDS(mouse.data,"mouse_sephin1_all_combined_re.rds")
+DefaultAssay(mouse.data)<-"RNA"
+mouse.data<-FindVariableFeatures(mouse.data)
+mouse.data$percent.mt<-PercentageFeatureSet(mouse.data,pattern="^mt-")
+plan("multiprocess", workers = 8)
+mouse.data<-ScaleData(mouse.data,vars.to.regress = "percent.mt")
+mouse.data<-RunPCA(mouse.data,npcs=100)
+#saveRDS(mouse.data,"mouse_sephin1_all_combined_norm_by_mt.rds")
+mouse.data <- FindNeighbors(mouse.data, reduction = "pca", dims = 1:50, nn.eps = 0.5)
+mouse.data <- FindClusters(mouse.data, resolution = 3, n.start = 10)
+mouse.data<-RunUMAP(mouse.data,reduction="pca",dims=1:50)
+mouse.data<-RunTSNE(mouse.data,reduction="pca",dims=1:50)
+#saveRDS(mouse.data,"mouse_sephin1_remove_ACK_final_reclustered_re.rds")
+saveRDS(mouse.data,"mouse_sephin1_all_combined_norm_by_mt.rds")
+plan("multiprocess",workers=8)  
+all_markers<-FindAllMarkers(mouse.data,min.pct=0.25)
+write.csv(all_markers,"mouse_sephin1_without_ACK_all_markers_final.csv",quote=F)
+#write.csv(all_markers,"mouse_sephin1_all_markers.csv",quote=F)
